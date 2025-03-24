@@ -1,0 +1,126 @@
+import pandas as pd
+import os
+from rdkit import Chem
+from rdkit.Chem import Descriptors
+from tqdm import tqdm
+
+# Enable progress_apply for pandas
+tqdm.pandas()
+
+# Try to import pubchempy for fetching molecule names
+try:
+    import pubchempy as pcp
+    has_pubchempy = True
+except ModuleNotFoundError:
+    has_pubchempy = False
+    print("Warning: pubchempy not installed. Molecule names will be set to 'Name not found'.")
+
+# Load the CSV file
+file_path = "SMILES_Big_Data_Set.csv"
+if os.path.exists(file_path):
+    df = pd.read_csv(file_path)
+    print("File loaded successfully!")
+else:
+    print("Error: File not found. Check the file path.")
+    exit()
+
+# Trim spaces from column names
+df.columns = df.columns.str.strip()
+
+# Ensure Molecule Names Are Present
+if "Name" not in df.columns:
+    if has_pubchempy:
+        def fetch_molecule_name(smiles):
+            try:
+                compounds = pcp.get_compounds(smiles, 'smiles')
+                if compounds:
+                    comp = compounds[0]
+                    if comp.iupac_name and comp.iupac_name.strip():
+                        return comp.iupac_name.strip()
+                    elif comp.synonyms:
+                        for syn in comp.synonyms:
+                            if syn.strip():
+                                return syn.strip()
+                return "Name not found"
+            except Exception:
+                return "Name not found"
+        df["Name"] = df["SMILES"].progress_apply(fetch_molecule_name)
+    else:
+        df["Name"] = ["Name not found" for _ in df.index]
+
+# Validate SMILES and Remove Invalid Entries
+invalid_indices = []
+
+def is_valid_smiles(smiles, index):
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            invalid_indices.append((index, smiles))
+            return False
+        Chem.SanitizeMol(mol)  # This will raise an exception if there is a valence issue.
+        return True
+    except:
+        invalid_indices.append((index, smiles))
+        return False
+
+df["is_valid"] = df["SMILES"].progress_apply(lambda x: is_valid_smiles(x, df.index[df["SMILES"] == x][0]))
+if invalid_indices:
+    print("\nInvalid SMILES detected and removed:")
+    for idx, smi in invalid_indices:
+        print(f"Row {idx}: {smi}")
+
+df_cleaned = df[df["is_valid"]].copy()
+df_cleaned.drop(columns=["is_valid"], inplace=True)
+
+# Compute Molecular Descriptors
+def compute_properties(smiles):
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        return {
+            "Molecular Weight (MolWt)": Descriptors.MolWt(mol),
+            "LogP (Octanol-Water Partition Coefficient)": Descriptors.MolLogP(mol),
+            "Topological Polar Surface Area (TPSA)": Descriptors.TPSA(mol),
+            "Number of Hydrogen Bond Donors (HBD)": Descriptors.NumHDonors(mol),
+            "Number of Hydrogen Bond Acceptors (HBA)": Descriptors.NumHAcceptors(mol),
+            "Number of Rotatable Bonds": Descriptors.NumRotatableBonds(mol),
+            "Number of Rings": Descriptors.RingCount(mol),
+            "Fraction of sp3 Carbon Atoms (FractionCSP3)": Descriptors.FractionCSP3(mol),
+            "Number of Heavy Atoms": Descriptors.HeavyAtomCount(mol),
+            "Number of Aromatic Rings": Descriptors.NumAromaticRings(mol),
+            "Number of Aliphatic Rings": Descriptors.NumAliphaticRings(mol),
+            "Number of Saturated Rings": Descriptors.NumSaturatedRings(mol),
+            "Number of Heteroatoms": Descriptors.NumHeteroatoms(mol),
+            "Balaban J Index": Descriptors.BalabanJ(mol),
+            "Bertz Complexity": Descriptors.BertzCT(mol),
+            "Chi0v (Molecular Connectivity Index)": Descriptors.Chi0v(mol),
+            "Chi1v (Molecular Connectivity Index)": Descriptors.Chi1v(mol),
+            "Chi2v (Molecular Connectivity Index)": Descriptors.Chi2v(mol),
+            "Kappa1 (Kappa Shape Index)": Descriptors.Kappa1(mol),
+            "Kappa2 (Kappa Shape Index)": Descriptors.Kappa2(mol),
+            "Hall-Kier Alpha Index": Descriptors.HallKierAlpha(mol)
+        }
+    except:
+        return {key: None for key in [
+            "Molecular Weight (MolWt)", "LogP (Octanol-Water Partition Coefficient)",
+            "Topological Polar Surface Area (TPSA)", "Number of Hydrogen Bond Donors (HBD)",
+            "Number of Hydrogen Bond Acceptors (HBA)", "Number of Rotatable Bonds",
+            "Number of Rings", "Fraction of sp3 Carbon Atoms (FractionCSP3)",
+            "Number of Heavy Atoms", "Number of Aromatic Rings", "Number of Aliphatic Rings",
+            "Number of Saturated Rings", "Number of Heteroatoms", "Balaban J Index",
+            "Bertz Complexity", "Chi0v (Molecular Connectivity Index)", "Chi1v (Molecular Connectivity Index)",
+            "Chi2v (Molecular Connectivity Index)", "Kappa1 (Kappa Shape Index)", "Kappa2 (Kappa Shape Index)",
+            "Hall-Kier Alpha Index"
+        ]}
+
+df_cleaned["Descriptors"] = df_cleaned["SMILES"].progress_apply(compute_properties)
+df_descriptors = pd.json_normalize(df_cleaned["Descriptors"])
+df_cleaned.drop(columns=["Descriptors"], inplace=True)
+df_final = pd.concat([df_cleaned, df_descriptors], axis=1)
+
+# Save the Enriched Dataset as CSV
+output_path = "cleaned_water_solubility_with_descriptors.csv"
+df_final.to_csv(output_path, index=False)
+
+print("\nFinal dataset saved at:", output_path)
+print("\nCleaned Data Preview:")
+print(df_final.head())
