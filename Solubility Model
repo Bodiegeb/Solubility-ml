@@ -1,0 +1,124 @@
+import pandas as pd
+import joblib
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, classification_report, confusion_matrix
+
+# Load the Dataset (CSV)
+file_path = "cleaned_water_solubility_with_descriptors.csv"
+
+if not os.path.exists(file_path):
+    print("Error: File not found. Check the file path.")
+    exit()
+
+df = pd.read_csv(file_path)
+print("Dataset loaded successfully.")
+
+# Select Features (X) and Target (y)
+# Save the "Name" and "SMILES" columns for reference
+identifier_columns = ["Name", "SMILES"]
+df_identifiers = df[identifier_columns] if all(col in df.columns for col in identifier_columns) else None
+
+# Define the target variable
+target_column = "measured log(solubility:mol/L)"
+if target_column not in df.columns:
+    print(f"Error: '{target_column}' column not found in dataset.")
+    exit()
+
+# Drop non-numeric columns and isolate features
+non_numeric_cols = ["SMILES", "Name", target_column]
+X = df.drop(columns=[col for col in non_numeric_cols if col in df.columns])
+y = df[target_column]
+
+# Split Data into Training and Testing Sets (80% train, 20% test)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+print("Training set shape:", X_train.shape)
+print("Testing set shape:", X_test.shape)
+
+# Scale Features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+print("Feature scaling completed.")
+
+# Train a New Random Forest Regression Model (Solubility Prediction)
+solubility_model = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+solubility_model.fit(X_train_scaled, y_train)
+print("Solubility prediction model training completed.")
+
+# Make Predictions and Evaluate Performance
+y_pred = solubility_model.predict(X_test_scaled)
+
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+print("\nSolubility Model Performance:")
+print("Mean Squared Error (MSE):", mse)
+print("R² Score:", r2)
+
+# Scatter plot of actual vs. predicted values
+plt.figure(figsize=(8, 6))
+plt.scatter(y_test, y_pred, alpha=0.7)
+plt.xlabel("Actual log(solubility:mol/L)")
+plt.ylabel("Predicted log(solubility:mol/L)")
+plt.title("Predicted vs Actual Solubility")
+plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+plt.grid(True)
+plt.show()
+
+# Extend Model to Classify Solubility at 100 mM (0.1 mol/L)
+# Convert log(solubility) to mol/L
+df["Predicted log(solubility:mol/L)"] = solubility_model.predict(scaler.transform(X))
+df["Predicted solubility (mol/L)"] = 10 ** df["Predicted log(solubility:mol/L)"]
+
+# Classify solubility
+df["Solubility Class (100 mM)"] = df["Predicted solubility (mol/L)"].apply(
+    lambda x: "Soluble" if x >= 0.1 else "Insoluble"
+)
+
+# Train a Classifier for 100 mM Solubility
+# Create binary labels: 1 (Soluble), 0 (Insoluble)
+df["Binary Solubility Class"] = df["Solubility Class (100 mM)"].apply(lambda x: 1 if x == "Soluble" else 0)
+
+# Split data for classification
+X_train_cls, X_test_cls, y_train_cls, y_test_cls = train_test_split(
+    X_train_scaled, df.loc[X_train.index, "Binary Solubility Class"], test_size=0.2, random_state=42
+)
+
+# Train classification model
+solubility_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+solubility_classifier.fit(X_train_cls, y_train_cls)
+print("Solubility classification model training completed.")
+
+# Predict on test set
+y_pred_cls = solubility_classifier.predict(X_test_cls)
+
+# Evaluate classification performance
+print("\nSolubility Classification Performance:")
+print("Accuracy:", accuracy_score(y_test_cls, y_pred_cls))
+print("Confusion Matrix:\n", confusion_matrix(y_test_cls, y_pred_cls))
+print("Classification Report:\n", classification_report(y_test_cls, y_pred_cls))
+
+# Filter for Na+ and K+ Organic Anion Salts
+# Assume that "Name" column contains molecular names, including Na+ and K+ salts
+if "Name" in df.columns:
+    df_salts = df[df["Name"].str.contains("Na|K", case=False, na=False)]
+    print(f"\nFiltered dataset contains {len(df_salts)} molecules with Na+ or K+.")
+
+#  Save the New Model, Classifier, and Scaler
+joblib.dump(solubility_model, "solubility_model_extended.pkl")
+joblib.dump(scaler, "solubility_scaler_extended.pkl")
+joblib.dump(solubility_classifier, "solubility_classifier.pkl")
+
+# Save full dataset with predictions
+output_file = "predicted_solubility_extended.csv"
+df.to_csv(output_file, index=False)
+print("\nFinal dataset with solubility classification saved to:", output_file)
+
+# Save only Na+/K+ salts
+output_salts = "solubility_salts_only.csv"
+df_salts.to_csv(output_salts, index=False)
+print("\nFiltered dataset with Na+/K+ salts saved to:", output_salts)
