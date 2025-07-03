@@ -18,7 +18,7 @@ The goal of this project is to accurately predict compound solubility using feat
 - pandas, NumPy
 - scikit-learn
 - matplotlib, seaborn
-- RDKit (for molecular descriptor generation, if applicable)
+- RDKit
 
 # Dataset
 Due to GitHub size limitations, large dataset files are not included here. Please contact me or refer to the script `data_loader.py` for instructions on downloading the data.
